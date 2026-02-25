@@ -11,12 +11,16 @@ mini-claw 版本改动：
   - 保留流式调用和重试逻辑
 """
 
+import os
 import time
 import anthropic as anthropic_lib
 from anthropic import Anthropic
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dotenv import load_dotenv
 from tools import get_all_tools, execute_tool
-from config import ANTHROPIC_API_KEY
+
+load_dotenv()
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
 
 class Agent:
@@ -25,13 +29,18 @@ class Agent:
         self.model = "claude-sonnet-4-20250514"
         self.max_turns = max_turns
 
-        self.system_prompt = """你是一个编程助手。你可以帮助用户：
+        workspace = os.environ.get("WORKSPACE_PATH", "未配置")
+        self.system_prompt = f"""你是一个只读的编程助手。你可以帮助用户：
 - 阅读和分析代码文件
 - 查看项目目录结构
 - 回答编程问题
 
+【重要限制】
+- 你只能读取文件，不能修改、删除或创建任何文件
+- 你只能访问工作目录内的文件：{workspace}
+- 如果用户要求超出以上范围的操作，礼貌拒绝并说明原因
+
 使用 read_file 读取文件，list_files 查看目录。
-如果需要多个操作，可以多次使用工具。
 回答要简洁、准确。"""
 
         self.conversation_history = []

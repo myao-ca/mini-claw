@@ -13,6 +13,29 @@ mini-claw 版本：只保留只读工具（safe by default）
 """
 
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# ============================================================
+# 安全边界
+# ============================================================
+
+_WORKSPACE = os.path.realpath(os.environ.get("WORKSPACE_PATH", ""))
+
+def _is_safe_path(path: str) -> bool:
+    """
+    检查路径是否在 WORKSPACE_PATH 内。
+
+    用 realpath() 先解析掉 ../../../ 等路径穿越攻击，
+    再检查是否以 WORKSPACE 开头。
+
+    对应 OpenClaw：agent 的 workspace 边界限制。
+    """
+    if not _WORKSPACE:
+        return False  # 未配置 WORKSPACE_PATH，一律拒绝
+    resolved = os.path.realpath(path)
+    return resolved.startswith(_WORKSPACE)
 
 
 # ============================================================
@@ -74,6 +97,8 @@ def tool(name: str, description: str, params: dict):
 )
 def read_file(path: str) -> str:
     try:
+        if not _is_safe_path(path):
+            return f"错误：路径超出允许的工作目录范围 - {path}"
         if not os.path.exists(path):
             return f"错误：文件不存在 - {path}"
         if not os.path.isfile(path):
@@ -97,6 +122,8 @@ def read_file(path: str) -> str:
 )
 def list_files(path: str = ".") -> str:
     try:
+        if not _is_safe_path(path):
+            return f"错误：路径超出允许的工作目录范围 - {path}"
         if not os.path.exists(path):
             return f"错误：目录不存在 - {path}"
         if not os.path.isdir(path):
