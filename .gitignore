@@ -18,3 +18,6 @@ venv/
 # 对话历史（包含用户数据）
 sessions/
 *.jsonl
+
+# workspace 目录（用户本地文件，不进 git）
+mini_claw_workspace/
