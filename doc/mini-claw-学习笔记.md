@@ -296,6 +296,36 @@ OpenClaw 里有完整的 Hook 系统（`src/plugins/hooks.ts`），支持 `messa
 
 ---
 
+### mini-claw 和 Anthropic 官方 Remote Control 不谋而合
+
+2026-02-25，Anthropic 发布了 **Claude Code Remote Control**——让你用手机控制本机运行的 Claude Code。
+
+它的架构和 mini-claw 的核心思路**完全一样**：
+
+```
+mini-claw:        Telegram → Telegram 服务器（中转）→ 本机 Agent → 回 Telegram
+Remote Control:   Claude App → Anthropic API（中转）→ 本机 Claude Code → 回 App
+```
+
+对比：
+
+| | mini-claw | Claude Remote Control |
+|--|--|--|
+| 触发入口 | Telegram | Claude 官方 App |
+| 中转层 | Telegram 服务器 | Anthropic API |
+| 本机执行 | 自己的 Agent | Claude Code |
+| 网络模式 | Polling 出站，不开入站端口 | HTTPS 出站，不开入站端口 |
+| Always-On | ✅ 常驻后台 | ❌ Terminal 必须开着 |
+| 自托管 | ✅ | ❌ 依赖 Anthropic 基础设施 |
+
+**本质上 mini-claw 就是一个自托管版的 Remote Control**——用 Telegram 替代了 Anthropic 的中转服务器，用自己的 Agent 替代了 Claude Code。
+
+安全设计上也不谋而合：两者都只做出站请求，本机不开任何入站端口。这不是巧合，而是"通过公共中转服务做远程控制"这个架构的自然结论。
+
+> 参考：[VentureBeat](https://venturebeat.com/orchestration/anthropic-just-released-a-mobile-version-of-claude-code-called-remote) · [Claude Code Docs](https://code.claude.com/docs/en/remote-control) · [Simon Willison](https://simonwillison.net/2026/Feb/25/claude-code-remote-control/)
+
+---
+
 ## 待实现 / 深入方向
 
 - [ ] 持久化会话历史（目前内存存储，重启丢失）→ 对应 coding-agent Step 4 后的自然延伸
