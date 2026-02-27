@@ -55,7 +55,7 @@
 ✅ Step 1-5    骨架：Telegram 触发 → Gateway → Agent → 回复
 ✅ Step 6      持久化会话历史
 ✅ Step 7      动态 System Prompt
-⬜ Step 8      上下文压缩（Compaction）
+✅ Step 8      上下文压缩（Compaction）
 ⬜ Step 9-11   架构升级
 ⬜ Step 12-13  智能升级
 ⬜ Step 14-15  生产化
@@ -80,17 +80,18 @@
 
 ## 学习进度追踪
 
-| 编号 | 核心竞争力 | Step 1 | Step 2 | Step 3 | Step 4 | Step 5 | Step 6 | Step 7 |
-|------|-----------|--------|--------|--------|--------|--------|--------|--------|
-| ① | Trigger Layer | | | | 重点 | 验证 | | |
-| ② | Channel Adapter Pattern | | | | 重点 | 验证 | | |
-| ③ | Gateway / Message Routing | | | | 重点 | 验证 | | |
-| ④ | Session Management | | | | 简陋 | | 持久化 | |
-| ⑤ | Security & Permissions | | 重点 | | | | | |
-| ⑥ | Config Management | 重点 | 扩展 | | | | | |
-| ⑦ | Always-On Service | | | | 重点 | 验证 | | |
-| ⑧ | Callback / Decoupling | | | | 重点 | | | |
-| ⑨ | Dynamic System Prompt | | | | | | | 重点 |
+| 编号 | 核心竞争力 | Step 1 | Step 2 | Step 3 | Step 4 | Step 5 | Step 6 | Step 7 | Step 8 |
+|------|-----------|--------|--------|--------|--------|--------|--------|--------|--------|
+| ① | Trigger Layer | | | | 重点 | 验证 | | | |
+| ② | Channel Adapter Pattern | | | | 重点 | 验证 | | | |
+| ③ | Gateway / Message Routing | | | | 重点 | 验证 | | | |
+| ④ | Session Management | | | | 简陋 | | 持久化 | | |
+| ⑤ | Security & Permissions | | 重点 | | | | | | |
+| ⑥ | Config Management | 重点 | 扩展 | | | | | | |
+| ⑦ | Always-On Service | | | | 重点 | 验证 | | | |
+| ⑧ | Callback / Decoupling | | | | 重点 | | | | |
+| ⑨ | Dynamic System Prompt | | | | | | | 重点 | |
+| ⑩ | Context Compaction | | | | | | | | 重点 |
 
 ---
 
@@ -285,6 +286,38 @@ chat 模式：直接回复              （适合路上聊天、头脑风暴）
 ```
 
 **对应 Claude Code**：我（Claude Code）启动时自动加载 `memory/MEMORY.md` 进 context，就是同样的机制。
+
+---
+
+### Step 8：上下文压缩（Compaction）
+
+**目标**：防止 conversation history 无限增长，撞上 context window 上限或造成 token 浪费。
+
+**问题根源**：每次调用 API 都要把完整的 `conversation_history` 传进去。聊得越久，token 越多，费用越高；聊够久甚至会超过上限导致 API 报错。
+
+**解法**：设两个阈值，超过时触发压缩：
+
+```
+MAX_HISTORY = 30   # 超过这个消息数触发压缩
+KEEP_RECENT = 10   # 压缩时保留最近几条不动
+```
+
+压缩过程：
+1. 把旧的 `history[:-10]` 拿去让 LLM 概括成一段摘要
+2. 用 `[摘要消息, 确认消息]` 替换掉那些旧消息
+3. 拼上最近 10 条完整消息
+4. 重写整个 session 文件（不再是 append）
+
+```
+压缩前：[旧消息 ×20] + [近期消息 ×10]  → 30 条
+压缩后：[摘要 ×2]   + [近期消息 ×10]  → 12 条
+```
+
+**对应 Claude Code**：你在这次会话开头看到的那段长摘要，就是上一个 session 被压缩后的产物。Claude Code 帮你自动做了这件事，mini-claw 的 Step 8 就是同样的机制。
+
+**压缩的是什么文件**：就是 `sessions/{chat_id}.jsonl`。压缩前 30 行，压缩后 12 行，`_compact_history()` 最后把新的 `conversation_history` 整个覆盖写入那个文件（不是 append）。随时可以打开文件直接看到压缩前后的变化。
+
+**对应 OpenClaw**：`compaction.ts`
 
 ---
 
