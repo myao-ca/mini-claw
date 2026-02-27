@@ -53,7 +53,8 @@
 
 ```
 ✅ Step 1-5    骨架：Telegram 触发 → Gateway → Agent → 回复
-⬜ Step 6-8    记忆与状态
+✅ Step 6      持久化会话历史
+⬜ Step 7-8    记忆与状态（续）
 ⬜ Step 9-11   架构升级
 ⬜ Step 12-13  智能升级
 ⬜ Step 14-15  生产化
@@ -78,16 +79,16 @@
 
 ## 学习进度追踪
 
-| 编号 | 核心竞争力 | Step 1 | Step 2 | Step 3 | Step 4 | Step 5 |
-|------|-----------|--------|--------|--------|--------|--------|
-| ① | Trigger Layer | | | | 重点 | 验证 |
-| ② | Channel Adapter Pattern | | | | 重点 | 验证 |
-| ③ | Gateway / Message Routing | | | | 重点 | 验证 |
-| ④ | Session Management | | | | 简陋 | |
-| ⑤ | Security & Permissions | | 重点 | | | |
-| ⑥ | Config Management | 重点 | 扩展 | | | |
-| ⑦ | Always-On Service | | | | 重点 | 验证 |
-| ⑧ | Callback / Decoupling | | | | 重点 | |
+| 编号 | 核心竞争力 | Step 1 | Step 2 | Step 3 | Step 4 | Step 5 | Step 6 |
+|------|-----------|--------|--------|--------|--------|--------|--------|
+| ① | Trigger Layer | | | | 重点 | 验证 | |
+| ② | Channel Adapter Pattern | | | | 重点 | 验证 | |
+| ③ | Gateway / Message Routing | | | | 重点 | 验证 | |
+| ④ | Session Management | | | | 简陋 | | 持久化 |
+| ⑤ | Security & Permissions | | 重点 | | | | |
+| ⑥ | Config Management | 重点 | 扩展 | | | | |
+| ⑦ | Always-On Service | | | | 重点 | 验证 | |
+| ⑧ | Callback / Decoupling | | | | 重点 | | |
 
 ---
 
@@ -225,6 +226,34 @@ send_reply()  → Telegram
 
 ---
 
+### Step 6：持久化会话历史
+
+**目标**：进程重启后对话上下文不丢失，Bot 不会"失忆"。
+
+**核心改动**：
+
+| 文件 | 改动 |
+|------|------|
+| `agent.py` | `__init__` 接收 `session_id`，启动时 `_load_history()`，每次 append 后 `_save_message()` |
+| `gateway.py` | `Agent()` → `Agent(str(chat_id))`，每个用户独立文件 |
+
+**存储格式**：`sessions/{chat_id}.jsonl`，每行一条消息，append-only。
+
+**记录内容**：不只是用户问答，而是完整的 agentic 轨迹：
+```
+用户的问题 → 规划 → 触发执行 → LLM 工具调用 → 工具结果 → 最终回答
+```
+这是因为每次调用 API 都要把完整 messages 数组传进去，所以 `conversation_history` 本身就是这个数组——持久化只是把它写到文件里。
+
+**两层记忆分工**：
+
+| 层 | 作用 | 存活 |
+|----|------|------|
+| `sessions` dict（内存） | 同一次进程运行内快速复用 Agent 实例 | 进程重启消失 |
+| `.jsonl` 文件（磁盘） | 进程重启后恢复全部上下文 | 永久，直到 `/reset` |
+
+---
+
 ## Tips & 知识点
 
 ### TEMP 环境变量与 Windows 短路径问题
@@ -326,9 +355,52 @@ Remote Control:   Claude App → Anthropic API（中转）→ 本机 Claude Code
 
 ---
 
+### 记忆即人格——用《记忆碎片》理解 LLM 的 History
+
+电影《记忆碎片》（Memento，诺兰）里的主角只有短期记忆，每次睡醒昨天发生的事全部消失。他靠一张张卡片重建自己的世界观——卡片上写着"这是昨天的我给你写的，请相信它"。
+
+**LLM 就是这个主角。**
+
+- 每次 API 调用，Claude 没有任何记忆，完全从零开始
+- `messages` 数组就是那叠卡片——把过去发生的一切"喂"给它，它才知道上下文
+- `_load_history()` 就是每天早上翻出卡片重新读一遍
+- `/reset` 就是把卡片全部销毁，从头开始认识世界
+
+**记录的不只是对话，是完整的思维过程：**
+
+每张"卡片"里装的不只是"你问了什么、我答了什么"，而是完整的 agentic 轨迹：
+```
+用户的问题
+→ LLM 制定的计划
+→ LLM 决定调用哪个工具、参数是什么
+→ 工具执行的真实结果
+→ 最终回答
+```
+下次加载历史，LLM 看到的是完整的上一轮"思考过程"，而不只是结论。
+
+**记忆即人格：**
+
+同样的模型权重，给它不同的 history，它就变成了不同的"人"：
+- 记住了你所有代码偏好的助手
+- 记住了你每天日程的秘书
+- 记住了你私事的朋友
+
+这些"人格"可以复制、分叉、篡改。《记忆碎片》里，最后发现有人一直在偷偷换他口袋里的卡片——这在 AI 里叫 **prompt injection**，是 Always-On 系统要防范的真实威胁。
+
+**两层记忆的分工：**
+
+| | 类比 | 作用 | 存活时间 |
+|---|---|---|---|
+| `sessions` dict（内存） | 今天的短期记忆 | 同一次运行中快速复用 | 进程重启即消失 |
+| `.jsonl` 文件（磁盘） | 卡片 | 进程重启后恢复全部上下文 | 永久，直到 `/reset` |
+
+> Claude Code 的 `/resume` 命令做的就是这件事：选一个 `.jsonl` 文件，把里面所有消息作为 `messages` 传给 API，Claude 就"接上了"上次的工作。那些文件就在 `~/.claude/projects/` 下，可以直接打开看。
+
+---
+
 ## 待实现 / 深入方向
 
-- [ ] 持久化会话历史（目前内存存储，重启丢失）→ 对应 coding-agent Step 4 后的自然延伸
+- [x] 持久化会话历史（目前内存存储，重启丢失）→ 对应 coding-agent Step 4 后的自然延伸
 - [ ] 消息处理中显示"typing..."状态（已有 `send_chat_action`，但 Agent 跑完才回复，中间无反馈）
 - [ ] Webhook 替代 Polling（需要公网地址，更适合生产）
 - [ ] 多 Channel 支持（加一个 `discord_channel.py` 验证 Adapter 模式的可扩展性）
