@@ -432,6 +432,25 @@ Remote Control:   Claude App → Anthropic API（中转）→ 本机 Claude Code
 
 ---
 
+### 换马甲 vs 真正的 Multi-Agent
+
+"Multi-agent"这个词在业界用得很乱，有必要区分两种本质不同的东西。
+
+**换马甲（mode switching）**：同一个 agent 实例，同一段 history，只是 system prompt 或工具集不同。`/chat` 和 `/code` 模式切换就是这个——本质是一个 agent 的不同状态，不是多个 agent。
+
+**真正的 multi-agent**：多个独立的 agent 实例，各自有自己的 history，可以并行运行，互相传消息协调。mini-claw 里每个 chat_id 对应一个独立的 Agent 实例，这才是工程意义上的多 agent——哪怕它们的 system prompt 完全一样。
+
+| | 换马甲 | 多实例 |
+|---|---|---|
+| history | 共享 | 各自独立 |
+| 并行 | 不能 | 可以 |
+| 互相通信 | 不需要 | 可以协调 |
+| 本质 | 同一个人换衣服 | 不同的人 |
+
+真正有意思的 multi-agent 是后者——多个实例并行跑，一个 agent 的输出成为另一个 agent 的输入。这是 OpenClaw 里 task queue 和 agent orchestration 要解决的核心问题。很多被称为"multi-agent"的系统，其实只是换马甲。
+
+---
+
 ## 待实现 / 深入方向
 
 - [x] 持久化会话历史（目前内存存储，重启丢失）→ 对应 coding-agent Step 4 后的自然延伸
