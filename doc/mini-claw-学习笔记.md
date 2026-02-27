@@ -405,3 +405,23 @@ Remote Control:   Claude App → Anthropic API（中转）→ 本机 Claude Code
 - [ ] Webhook 替代 Polling（需要公网地址，更适合生产）
 - [ ] 多 Channel 支持（加一个 `discord_channel.py` 验证 Adapter 模式的可扩展性）
 - [ ] 定时任务（`/remind 明天早上8点 提醒我开会`）→ Always-On 的典型场景
+
+---
+
+## 下一个项目：Claude Code ↔ mini-claw 共享上下文
+
+**背景**：路上用 mini-claw 和 bot 聊项目，回到电脑前用 Claude Code 编程。两个系统目前是隔离的，希望它们共享上下文——不只是干净的学习笔记，而是对话的质感：类比、来回推敲的过程、一起想出来的东西。
+
+**核心设计**：一个 `JOURNAL.md` 文件，介于"完整聊天记录"和"学习笔记"之间。
+
+```
+Claude Code session 结束  →  我把精华整理进 JOURNAL.md（结论 + 有意思的类比 + 好问题）
+mini-claw 路上聊          →  bot 启动时读 JOURNAL.md，知道项目现状
+路上 brainstorm 出结论    →  /note 命令追加进 JOURNAL.md
+下次 Claude Code 开始     →  读 JOURNAL.md，接上上次
+```
+
+**待实现**：
+- [ ] `agent.py`：启动时读 `JOURNAL.md` 注入 system prompt
+- [ ] `gateway.py` + `tools.py`：加 `/note` 命令，安全地追加写入文件
+- [ ] 约定 `JOURNAL.md` 的写作风格（不是流水账，是值得留下来的东西）
