@@ -12,10 +12,12 @@ mini-claw 版本改动：
 """
 
 import os
+import json
 import time
 import anthropic as anthropic_lib
 from anthropic import Anthropic
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from dotenv import load_dotenv
 from tools import get_all_tools, execute_tool
 
@@ -24,10 +26,14 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
 
 class Agent:
-    def __init__(self, max_turns: int = 10):
+    def __init__(self, session_id: str, max_turns: int = 10):
         self.client = Anthropic(api_key=ANTHROPIC_API_KEY)
         self.model = "claude-sonnet-4-20250514"
         self.max_turns = max_turns
+
+        # 持久化：每个会话对应一个 .jsonl 文件
+        # 对应 OpenClaw：.jsonl 会话存储
+        self.session_file = Path("sessions") / f"{session_id}.jsonl"
 
         workspace = os.environ.get("WORKSPACE_PATH", "未配置")
         self.system_prompt = f"""你是一个只读的编程助手。你可以帮助用户：
@@ -43,7 +49,8 @@ class Agent:
 使用 read_file 读取文件，list_files 查看目录。
 回答要简洁、准确。"""
 
-        self.conversation_history = []
+        # 启动时从文件加载历史，恢复上次的对话上下文
+        self.conversation_history = self._load_history()
 
     def run(self, user_message: str) -> str:
         """
@@ -56,9 +63,15 @@ class Agent:
         # --- Phase 1: 规划 ---
         plan = self._create_plan(user_message)
 
-        self.conversation_history.append({"role": "user", "content": user_message})
-        self.conversation_history.append({"role": "assistant", "content": f"我的执行计划：\n\n{plan}"})
-        self.conversation_history.append({"role": "user", "content": "好，请严格按照计划执行，完成后汇报最终结果。"})
+        msg_user = {"role": "user", "content": user_message}
+        msg_plan = {"role": "assistant", "content": f"我的执行计划：\n\n{plan}"}
+        msg_go = {"role": "user", "content": "好，请严格按照计划执行，完成后汇报最终结果。"}
+        self.conversation_history.append(msg_user)
+        self._save_message(msg_user)
+        self.conversation_history.append(msg_plan)
+        self._save_message(msg_plan)
+        self.conversation_history.append(msg_go)
+        self._save_message(msg_go)
 
         # --- Phase 2: 执行 ---
         turn = 0
@@ -71,10 +84,9 @@ class Agent:
                 return f"[错误] LLM 调用失败：{str(e)}"
 
             if response.stop_reason == "end_turn":
-                self.conversation_history.append({
-                    "role": "assistant",
-                    "content": response.content
-                })
+                msg_final = {"role": "assistant", "content": response.content}
+                self.conversation_history.append(msg_final)
+                self._save_message(msg_final)
                 return response_text
 
             elif response.stop_reason == "tool_use":
@@ -86,8 +98,77 @@ class Agent:
         return f"[警告] 达到最大轮次 {self.max_turns}，任务可能未完成。"
 
     def reset(self):
-        """清空对话历史"""
+        """清空对话历史，同时删除持久化文件"""
         self.conversation_history = []
+        if self.session_file.exists():
+            self.session_file.unlink()
+
+    def _load_history(self) -> list:
+        """从 .jsonl 文件加载历史对话，加载时顺便清理多余字段"""
+        if not self.session_file.exists():
+            return []
+        history = []
+        with open(self.session_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    history.append(self._clean_content_blocks(json.loads(line)))
+        return history
+
+    def _clean_content_blocks(self, message: dict) -> dict:
+        """
+        清理消息 content 中多余的字段，只保留 API 协议字段。
+
+        加载旧版 .jsonl 时修复因 SDK 升级引入的额外字段
+        （如 citations、parsed_output、caller 等）。
+        """
+        content = message.get("content")
+        if not isinstance(content, list):
+            return message
+        cleaned = []
+        for block in content:
+            if not isinstance(block, dict):
+                cleaned.append(block)
+                continue
+            t = block.get("type")
+            if t == "text":
+                cleaned.append({"type": "text", "text": block["text"]})
+            elif t == "tool_use":
+                cleaned.append({"type": "tool_use", "id": block["id"],
+                                 "name": block["name"], "input": block["input"]})
+            else:
+                cleaned.append(block)  # tool_result 等保持原样
+        return {**message, "content": cleaned}
+
+    def _serialize_message(self, message: dict) -> dict:
+        """
+        将消息序列化为 JSON 可存储格式。
+
+        只保留 API 协议规定的核心字段，丢弃 SDK 版本特有的内部字段
+        （不同版本 SDK 会在 TextBlock/ToolUseBlock 里加入不同字段，
+        如 citations、parsed_output、caller 等，这些字段 API 不接受）。
+        """
+        content = message.get("content")
+        if not isinstance(content, list):
+            return message
+        serialized = []
+        for block in content:
+            t = getattr(block, "type", None)
+            if t == "text":
+                serialized.append({"type": "text", "text": block.text})
+            elif t == "tool_use":
+                serialized.append({"type": "tool_use", "id": block.id,
+                                   "name": block.name, "input": dict(block.input)})
+            else:
+                serialized.append(block)
+        return {**message, "content": serialized}
+
+    def _save_message(self, message: dict):
+        """将单条消息追加写入 .jsonl 文件"""
+        self.session_file.parent.mkdir(exist_ok=True)
+        serializable = self._serialize_message(message)
+        with open(self.session_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(serializable, ensure_ascii=False) + "\n")
 
     def _create_plan(self, user_message: str) -> str:
         """规划阶段：不带工具的纯推理"""
@@ -144,10 +225,9 @@ class Agent:
 
     def _process_tool_calls(self, messages: list, response) -> None:
         """处理工具调用（并行执行）"""
-        messages.append({
-            "role": "assistant",
-            "content": response.content
-        })
+        msg_assistant = {"role": "assistant", "content": response.content}
+        messages.append(msg_assistant)
+        self._save_message(msg_assistant)
 
         tool_blocks = [b for b in response.content if b.type == "tool_use"]
 
@@ -167,7 +247,6 @@ class Agent:
             for block in tool_blocks
         ]
 
-        messages.append({
-            "role": "user",
-            "content": tool_results
-        })
+        msg_results = {"role": "user", "content": tool_results}
+        messages.append(msg_results)
+        self._save_message(msg_results)

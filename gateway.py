@@ -38,7 +38,7 @@ sessions: dict[int, Agent] = {}
 def get_or_create_session(chat_id: int) -> Agent:
     """获取或创建该 chat_id 的 Agent 会话"""
     if chat_id not in sessions:
-        sessions[chat_id] = Agent()
+        sessions[chat_id] = Agent(str(chat_id))
     return sessions[chat_id]
 
 
