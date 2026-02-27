@@ -16,6 +16,15 @@ Gateway — 主循环
 from dotenv import load_dotenv
 load_dotenv()
 
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(message)s",
+    datefmt="%H:%M:%S"
+)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
+
 from agent import Agent
 from telegram_channel import start_polling
 
@@ -57,6 +66,7 @@ def handle_message(chat_id: int, text: str) -> str:
       /reset  — 清空当前会话的对话历史
     """
     text = text.strip()
+    logger.info(f"[{chat_id}] >>> {text!r}")
 
     if text == "/start":
         return (
@@ -87,7 +97,9 @@ def handle_message(chat_id: int, text: str) -> str:
 
     # 路由到 Agent
     agent = get_or_create_session(chat_id)
-    return agent.run(text)
+    response = agent.run(text)
+    logger.info(f"[{chat_id}] <<< {response[:80]!r}{'...' if len(response) > 80 else ''}")
+    return response
 
     # 临时测试用（验证 Telegram 连接正常后删掉）
     # return "hi!"

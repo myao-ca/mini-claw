@@ -25,6 +25,8 @@ from tools import get_all_tools, execute_tool
 load_dotenv()
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
+logger = __import__("logging").getLogger(__name__)
+
 
 class Agent:
     def __init__(self, session_id: str, max_turns: int = 10):
@@ -53,6 +55,7 @@ class Agent:
           - 不直接 print，而是收集结果返回
           - 因为调用方（gateway）需要拿到结果再发给用户
         """
+        logger.info(f"mode={self.mode}  开始处理")
         # chat 模式跳过规划阶段，直接对话
         if self.mode == "chat":
             msg_user = {"role": "user", "content": user_message}
@@ -60,6 +63,7 @@ class Agent:
             self._save_message(msg_user)
         else:
             # --- Phase 1: 规划 ---
+            logger.info("Phase 1: 规划中...")
             plan = self._create_plan(user_message)
 
             msg_user = {"role": "user", "content": user_message}
@@ -76,19 +80,24 @@ class Agent:
         turn = 0
         while turn < self.max_turns:
             turn += 1
+            logger.info(f"Turn {turn}: 调用 LLM...")
 
             try:
                 response, response_text = self._call_llm(self.conversation_history)
             except Exception as e:
+                logger.error(f"LLM 调用失败: {e}")
                 return f"[错误] LLM 调用失败：{str(e)}"
 
             if response.stop_reason == "end_turn":
+                logger.info(f"Turn {turn}: end_turn，完成")
                 msg_final = {"role": "assistant", "content": response.content}
                 self.conversation_history.append(msg_final)
                 self._save_message(msg_final)
                 return response_text
 
             elif response.stop_reason == "tool_use":
+                tool_names = [b.name for b in response.content if b.type == "tool_use"]
+                logger.info(f"Turn {turn}: tool_use → {tool_names}")
                 self._process_tool_calls(self.conversation_history, response)
 
             else:
