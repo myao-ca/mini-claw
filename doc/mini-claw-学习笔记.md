@@ -54,7 +54,8 @@
 ```
 ✅ Step 1-5    骨架：Telegram 触发 → Gateway → Agent → 回复
 ✅ Step 6      持久化会话历史
-⬜ Step 7-8    记忆与状态（续）
+✅ Step 7      动态 System Prompt
+⬜ Step 8      上下文压缩（Compaction）
 ⬜ Step 9-11   架构升级
 ⬜ Step 12-13  智能升级
 ⬜ Step 14-15  生产化
@@ -79,16 +80,17 @@
 
 ## 学习进度追踪
 
-| 编号 | 核心竞争力 | Step 1 | Step 2 | Step 3 | Step 4 | Step 5 | Step 6 |
-|------|-----------|--------|--------|--------|--------|--------|--------|
-| ① | Trigger Layer | | | | 重点 | 验证 | |
-| ② | Channel Adapter Pattern | | | | 重点 | 验证 | |
-| ③ | Gateway / Message Routing | | | | 重点 | 验证 | |
-| ④ | Session Management | | | | 简陋 | | 持久化 |
-| ⑤ | Security & Permissions | | 重点 | | | | |
-| ⑥ | Config Management | 重点 | 扩展 | | | | |
-| ⑦ | Always-On Service | | | | 重点 | 验证 | |
-| ⑧ | Callback / Decoupling | | | | 重点 | | |
+| 编号 | 核心竞争力 | Step 1 | Step 2 | Step 3 | Step 4 | Step 5 | Step 6 | Step 7 |
+|------|-----------|--------|--------|--------|--------|--------|--------|--------|
+| ① | Trigger Layer | | | | 重点 | 验证 | | |
+| ② | Channel Adapter Pattern | | | | 重点 | 验证 | | |
+| ③ | Gateway / Message Routing | | | | 重点 | 验证 | | |
+| ④ | Session Management | | | | 简陋 | | 持久化 | |
+| ⑤ | Security & Permissions | | 重点 | | | | | |
+| ⑥ | Config Management | 重点 | 扩展 | | | | | |
+| ⑦ | Always-On Service | | | | 重点 | 验证 | | |
+| ⑧ | Callback / Decoupling | | | | 重点 | | | |
+| ⑨ | Dynamic System Prompt | | | | | | | 重点 |
 
 ---
 
@@ -251,6 +253,38 @@ send_reply()  → Telegram
 |----|------|------|
 | `sessions` dict（内存） | 同一次进程运行内快速复用 Agent 实例 | 进程重启消失 |
 | `.jsonl` 文件（磁盘） | 进程重启后恢复全部上下文 | 永久，直到 `/reset` |
+
+---
+
+### Step 7：动态 System Prompt
+
+**目标**：system prompt 不再写死，每次调用 LLM 前现拼，根据当前状态注入不同内容。
+
+**核心改动**：
+
+- `__init__` 里删掉写死的 `self.system_prompt`，改为 `self.mode = "code"`
+- 新增 `_build_system_prompt()` 方法，每次调用前现拼
+- `_call_llm()` 和 `_create_plan()` 改用 `_build_system_prompt()`
+- gateway 加 `/chat` / `/code` 命令切换模式
+
+**动态注入的内容**：
+
+| 内容 | 说明 |
+|------|------|
+| 当前时间 | `datetime.now()` — bot 知道现在几点几号星期几 |
+| 对话模式 | `code`（编程助手）或 `chat`（轻松聊天） |
+| MEMORY.md | 项目根目录若有此文件，内容自动追加进 system prompt |
+
+**模式切换的附带效果**：
+
+chat 模式不只是换了 system prompt——还跳过了 Plan-and-Execute 的规划阶段，直接对话。否则你说"你好"，bot 也要先列个执行计划。
+
+```
+code 模式：规划 → 执行 → 回复   （适合需要用工具的编程任务）
+chat 模式：直接回复              （适合路上聊天、头脑风暴）
+```
+
+**对应 Claude Code**：我（Claude Code）启动时自动加载 `memory/MEMORY.md` 进 context，就是同样的机制。
 
 ---
 
