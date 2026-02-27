@@ -65,6 +65,8 @@ def handle_message(chat_id: int, text: str) -> str:
             "• 读取和分析代码文件\n"
             "• 查看目录结构\n"
             "• 回答编程问题\n\n"
+            "/chat  — 切换到轻松聊天模式\n"
+            "/code  — 切换回编程助手模式\n"
             "/reset — 清空对话历史，重新开始"
         )
 
@@ -72,6 +74,16 @@ def handle_message(chat_id: int, text: str) -> str:
         if chat_id in sessions:
             sessions[chat_id].reset()
         return "✅ 对话已重置"
+
+    if text == "/chat":
+        agent = get_or_create_session(chat_id)
+        agent.mode = "chat"
+        return "💬 已切换到聊天模式，随便聊吧"
+
+    if text == "/code":
+        agent = get_or_create_session(chat_id)
+        agent.mode = "code"
+        return "💻 已切换到编程助手模式"
 
     # 路由到 Agent
     agent = get_or_create_session(chat_id)

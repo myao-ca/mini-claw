@@ -17,6 +17,7 @@ import time
 import anthropic as anthropic_lib
 from anthropic import Anthropic
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 from tools import get_all_tools, execute_tool
@@ -35,19 +36,11 @@ class Agent:
         # 对应 OpenClaw：.jsonl 会话存储
         self.session_file = Path("sessions") / f"{session_id}.jsonl"
 
-        workspace = os.environ.get("WORKSPACE_PATH", "未配置")
-        self.system_prompt = f"""你是一个只读的编程助手。你可以帮助用户：
-- 阅读和分析代码文件
-- 查看项目目录结构
-- 回答编程问题
+        self.workspace = os.environ.get("WORKSPACE_PATH", "未配置")
 
-【重要限制】
-- 你只能读取文件，不能修改、删除或创建任何文件
-- 你只能访问工作目录内的文件：{workspace}
-- 如果用户要求超出以上范围的操作，礼貌拒绝并说明原因
-
-使用 read_file 读取文件，list_files 查看目录。
-回答要简洁、准确。"""
+        # 对话模式：code（编程助手）或 chat（轻松聊天）
+        # 对应 OpenClaw：动态 system prompt 构建
+        self.mode = "code"
 
         # 启动时从文件加载历史，恢复上次的对话上下文
         self.conversation_history = self._load_history()
@@ -60,18 +53,24 @@ class Agent:
           - 不直接 print，而是收集结果返回
           - 因为调用方（gateway）需要拿到结果再发给用户
         """
-        # --- Phase 1: 规划 ---
-        plan = self._create_plan(user_message)
+        # chat 模式跳过规划阶段，直接对话
+        if self.mode == "chat":
+            msg_user = {"role": "user", "content": user_message}
+            self.conversation_history.append(msg_user)
+            self._save_message(msg_user)
+        else:
+            # --- Phase 1: 规划 ---
+            plan = self._create_plan(user_message)
 
-        msg_user = {"role": "user", "content": user_message}
-        msg_plan = {"role": "assistant", "content": f"我的执行计划：\n\n{plan}"}
-        msg_go = {"role": "user", "content": "好，请严格按照计划执行，完成后汇报最终结果。"}
-        self.conversation_history.append(msg_user)
-        self._save_message(msg_user)
-        self.conversation_history.append(msg_plan)
-        self._save_message(msg_plan)
-        self.conversation_history.append(msg_go)
-        self._save_message(msg_go)
+            msg_user = {"role": "user", "content": user_message}
+            msg_plan = {"role": "assistant", "content": f"我的执行计划：\n\n{plan}"}
+            msg_go = {"role": "user", "content": "好，请严格按照计划执行，完成后汇报最终结果。"}
+            self.conversation_history.append(msg_user)
+            self._save_message(msg_user)
+            self.conversation_history.append(msg_plan)
+            self._save_message(msg_plan)
+            self.conversation_history.append(msg_go)
+            self._save_message(msg_go)
 
         # --- Phase 2: 执行 ---
         turn = 0
@@ -96,6 +95,41 @@ class Agent:
                 return f"[错误] 意外的 stop_reason: {response.stop_reason}"
 
         return f"[警告] 达到最大轮次 {self.max_turns}，任务可能未完成。"
+
+    def _build_system_prompt(self) -> str:
+        """
+        动态构建 system prompt。
+
+        每次调用 LLM 前现拼，注入当前时间、模式、记忆文件。
+        对应 OpenClaw：每条消息处理前动态构建 system prompt。
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M %A")
+
+        if self.mode == "chat":
+            base = f"""你是用户的私人助手，当前时间：{now}。
+正在进行轻松的对话，可以讨论任何话题：项目想法、头脑风暴、日常聊天。
+不需要刻意使用工具，直接对话即可。"""
+        else:
+            base = f"""你是一个只读的编程助手，当前时间：{now}。你可以帮助用户：
+- 阅读和分析代码文件
+- 查看项目目录结构
+- 回答编程问题
+
+【重要限制】
+- 你只能读取文件，不能修改、删除或创建任何文件
+- 你只能访问工作目录内的文件：{self.workspace}
+- 如果用户要求超出以上范围的操作，礼貌拒绝并说明原因
+
+使用 read_file 读取文件，list_files 查看目录。"""
+
+        # 加载记忆文件（如果存在）
+        memory_file = Path("MEMORY.md")
+        if memory_file.exists():
+            memory = memory_file.read_text(encoding="utf-8").strip()
+            if memory:
+                base += f"\n\n## 记忆\n{memory}"
+
+        return base
 
     def reset(self):
         """清空对话历史，同时删除持久化文件"""
@@ -181,7 +215,7 @@ class Agent:
         with self.client.messages.stream(
             model=self.model,
             max_tokens=512,
-            system="你是一个任务规划助手。将用户任务分解为清晰的执行步骤。只输出步骤列表，简洁明了，不执行任何操作。",
+            system=self._build_system_prompt() + "\n\n请将任务分解为清晰的执行步骤。只输出步骤列表，简洁明了，不执行任何操作。",
             messages=planning_messages
         ) as stream:
             for text in stream.text_stream:
@@ -198,7 +232,7 @@ class Agent:
                 with self.client.messages.stream(
                     model=self.model,
                     max_tokens=4096,
-                    system=self.system_prompt,
+                    system=self._build_system_prompt(),
                     tools=get_all_tools(),
                     messages=messages
                 ) as stream:
