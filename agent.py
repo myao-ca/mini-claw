@@ -28,6 +28,10 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 logger = __import__("logging").getLogger(__name__)
 
 
+MAX_HISTORY = 30   # 超过这个消息数触发压缩
+KEEP_RECENT = 10   # 压缩时保留最近几条不动
+
+
 class Agent:
     def __init__(self, session_id: str, max_turns: int = 10):
         self.client = Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -55,6 +59,10 @@ class Agent:
           - 不直接 print，而是收集结果返回
           - 因为调用方（gateway）需要拿到结果再发给用户
         """
+        # 超过阈值则先压缩历史，对应 OpenClaw：compaction.ts
+        if len(self.conversation_history) > MAX_HISTORY:
+            self._compact_history()
+
         logger.info(f"mode={self.mode}  开始处理")
         # chat 模式跳过规划阶段，直接对话
         if self.mode == "chat":
@@ -145,6 +153,55 @@ class Agent:
         self.conversation_history = []
         if self.session_file.exists():
             self.session_file.unlink()
+
+    def _compact_history(self):
+        """
+        压缩对话历史：把旧消息概括成摘要，只保留最近 KEEP_RECENT 条。
+
+        对应 OpenClaw：compaction.ts
+        压缩后重写整个 session 文件（不再是 append）。
+        """
+        old_messages = self.conversation_history[:-KEEP_RECENT]
+        recent_messages = self.conversation_history[-KEEP_RECENT:]
+
+        logger.info(f"压缩历史：{len(old_messages)} 条 → 摘要，保留最近 {len(recent_messages)} 条")
+
+        # 让 LLM 概括旧消息
+        summary_text = ""
+        try:
+            with self.client.messages.stream(
+                model=self.model,
+                max_tokens=1024,
+                system="你是一个对话摘要助手。请将以下对话历史概括成简洁的摘要，保留关键信息和结论。",
+                messages=[{
+                    "role": "user",
+                    "content": f"请概括以下对话：\n\n{json.dumps(old_messages, ensure_ascii=False, indent=2)}"
+                }]
+            ) as stream:
+                for text in stream.text_stream:
+                    summary_text += text
+        except Exception as e:
+            logger.error(f"压缩失败，保持原历史：{e}")
+            return
+
+        # 用摘要替换旧消息，保留近期消息
+        summary_msg = {
+            "role": "user",
+            "content": f"【以下是之前对话的摘要，请基于此继续】\n\n{summary_text}"
+        }
+        ack_msg = {
+            "role": "assistant",
+            "content": "明白，我已了解之前的对话背景，请继续。"
+        }
+        self.conversation_history = [summary_msg, ack_msg] + recent_messages
+
+        # 重写整个 session 文件
+        self.session_file.parent.mkdir(exist_ok=True)
+        with open(self.session_file, "w", encoding="utf-8") as f:
+            for msg in self.conversation_history:
+                f.write(json.dumps(self._serialize_message(msg), ensure_ascii=False) + "\n")
+
+        logger.info(f"压缩完成，history 从 {len(old_messages) + len(recent_messages)} 条压缩至 {len(self.conversation_history)} 条")
 
     def _load_history(self) -> list:
         """从 .jsonl 文件加载历史对话，加载时顺便清理多余字段"""
