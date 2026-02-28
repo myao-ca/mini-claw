@@ -30,6 +30,7 @@ from threading import Thread
 
 from agent import Agent
 from telegram_channel import start_polling
+import hooks
 
 # ============================================================
 # 会话管理
@@ -72,8 +73,10 @@ def _worker(chat_id: int, q: Queue):
         text, response_q = q.get()
         try:
             agent = get_or_create_session(chat_id)
+            hooks.fire("before_agent_run", {"chat_id": chat_id, "text": text, "mode": agent.mode})
             result = agent.run(text)
             logger.info(f"[{chat_id}] <<< {result[:80]!r}{'...' if len(result) > 80 else ''}")
+            hooks.fire("after_reply", {"chat_id": chat_id, "text": text, "reply": result})
         except Exception as e:
             result = f"[错误] {e}"
             logger.error(f"[{chat_id}] worker 异常: {e}")
@@ -108,6 +111,7 @@ def handle_message(chat_id: int, text: str) -> str:
     """
     text = text.strip()
     logger.info(f"[{chat_id}] >>> {text!r}")
+    hooks.fire("message_received", {"chat_id": chat_id, "text": text})
 
     if text == "/start":
         return (
@@ -147,5 +151,8 @@ def handle_message(chat_id: int, text: str) -> str:
 # ============================================================
 
 if __name__ == "__main__":
+    # 注册 hook（测试用）
+    hooks.register("after_reply", lambda d: print(f"HOOK: {d['chat_id']} 收到了回复"))
+    
     print("🚀 Mini-Claw Gateway 启动中...")
     start_polling(handle_message)
