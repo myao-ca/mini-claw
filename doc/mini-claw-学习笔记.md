@@ -57,7 +57,8 @@
 ✅ Step 7      动态 System Prompt
 ✅ Step 8      上下文压缩（Compaction）
 ✅ Step 9      串行任务队列
-⬜ Step 9-11   架构升级
+✅ Step 10     Hook 系统
+⬜ Step 11     第二个频道（HTTP API）
 ⬜ Step 12-13  智能升级
 ⬜ Step 14-15  生产化
 ```
@@ -81,19 +82,20 @@
 
 ## 学习进度追踪
 
-| 编号 | 核心竞争力 | Step 1 | Step 2 | Step 3 | Step 4 | Step 5 | Step 6 | Step 7 | Step 8 | Step 9 |
-|------|-----------|--------|--------|--------|--------|--------|--------|--------|--------|--------|
-| ① | Trigger Layer | | | | 重点 | 验证 | | | | |
-| ② | Channel Adapter Pattern | | | | 重点 | 验证 | | | | |
-| ③ | Gateway / Message Routing | | | | 重点 | 验证 | | | | |
-| ④ | Session Management | | | | 简陋 | | 持久化 | | | 串行 |
-| ⑤ | Security & Permissions | | 重点 | | | | | | | |
-| ⑥ | Config Management | 重点 | 扩展 | | | | | | | |
-| ⑦ | Always-On Service | | | | 重点 | 验证 | | | | |
-| ⑧ | Callback / Decoupling | | | | 重点 | | | | | |
-| ⑨ | Dynamic System Prompt | | | | | | | 重点 | | |
-| ⑩ | Context Compaction | | | | | | | | 重点 | |
-| ⑪ | Task Queue | | | | | | | | | 重点 |
+| 编号 | 核心竞争力 | Step 1 | Step 2 | Step 3 | Step 4 | Step 5 | Step 6 | Step 7 | Step 8 | Step 9 | Step 10 |
+|------|-----------|--------|--------|--------|--------|--------|--------|--------|--------|--------|---------|
+| ① | Trigger Layer | | | | 重点 | 验证 | | | | | |
+| ② | Channel Adapter Pattern | | | | 重点 | 验证 | | | | | |
+| ③ | Gateway / Message Routing | | | | 重点 | 验证 | | | | | |
+| ④ | Session Management | | | | 简陋 | | 持久化 | | | 串行 | |
+| ⑤ | Security & Permissions | | 重点 | | | | | | | | |
+| ⑥ | Config Management | 重点 | 扩展 | | | | | | | | |
+| ⑦ | Always-On Service | | | | 重点 | 验证 | | | | | |
+| ⑧ | Callback / Decoupling | | | | 重点 | | | | | | |
+| ⑨ | Dynamic System Prompt | | | | | | | 重点 | | | |
+| ⑩ | Context Compaction | | | | | | | | 重点 | | |
+| ⑪ | Task Queue | | | | | | | | | 重点 | |
+| ⑫ | Hook System | | | | | | | | | | 重点 |
 
 ---
 
@@ -348,6 +350,70 @@ KEEP_RECENT = 10   # 压缩时保留最近几条不动
 | `get_or_create_queue()` | 首次创建队列时同步启动 worker 线程 |
 
 **对应 OpenClaw**：Task Channel Queue（串行 by default 的设计原则）
+
+---
+
+### Step 10：Hook 系统
+
+**目标**：让系统在关键时间点自动触发回调，不需要修改核心代码就能扩展行为。
+
+**核心改动**：
+
+| 文件 | 改动 |
+|------|------|
+| `hooks.py`（新建） | `register()` 注册回调，`fire()` 触发事件 |
+| `gateway.py` | 在关键位置调用 `hooks.fire()`，注入三个事件点 |
+
+**三个事件点**：
+
+```
+message_received  — 消息刚进来时      data: {chat_id, text}
+before_agent_run  — agent 开始处理前  data: {chat_id, text, mode}
+after_reply       — 回复发出后        data: {chat_id, text, reply}
+```
+
+**关键洞察：钩子是"洞"，实现是"钩"**
+
+`hooks.fire()` 在 gateway 里只是挂了个空钩子——没有任何注册的回调时，调用了等于什么都没发生，完全是空操作。只有当你 `register()` 注入了真实的实现（比如一个 `print` 语句，或者一个写日志的函数），那个空钩子才有了意义。
+
+```python
+# 这一行只是"打洞"——存在，但不做任何事
+hooks.fire("after_reply", {...})
+
+# 这一行才是"挂钩"——给洞赋予了真实的行为
+hooks.register("after_reply", lambda d: print(f"HOOK: {d['chat_id']} 收到了回复"))
+```
+
+这也意味着核心代码（gateway.py、agent.py）不需要知道外部扩展是什么，扩展也不需要修改核心代码——两边只通过事件名和 data dict 约定，完全解耦。
+
+**对应 Claude Code**：
+
+Claude Code 里也有同样的机制，只是 Anthropic 替你把钉子埋好了：
+
+```
+PreToolUse   — 工具调用之前
+PostToolUse  — 工具调用之后
+Stop         — Claude 回复结束时
+Notification — 需要通知用户时
+```
+
+你在 `settings.json` 里配置：
+
+```json
+"hooks": {
+  "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo 要跑bash了"}]}]
+}
+```
+
+就是你在那颗空着的钉子上挂上了自己的挂历——从此每次 Claude 要用 Bash 之前，都会先跑你的命令。
+
+| | mini-claw | Claude Code |
+|---|---|---|
+| 谁埋钉子 | 你自己（`hooks.fire()`） | Anthropic 预埋好 |
+| 谁挂东西 | 你自己（`hooks.register()`） | 你自己（`settings.json`） |
+| 本质 | 相同 | 相同 |
+
+**对应 OpenClaw**：`src/plugins/hooks.ts`
 
 ---
 
