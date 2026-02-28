@@ -30,6 +30,7 @@ from threading import Thread
 
 from agent import Agent
 from telegram_channel import start_polling
+from http_channel import start_http
 import hooks
 
 # ============================================================
@@ -153,6 +154,7 @@ def handle_message(chat_id: int, text: str) -> str:
 if __name__ == "__main__":
     # 注册 hook（测试用）
     hooks.register("after_reply", lambda d: print(f"HOOK: {d['chat_id']} 收到了回复"))
-    
+
     print("🚀 Mini-Claw Gateway 启动中...")
-    start_polling(handle_message)
+    start_http(handle_message)      # 后台线程，不阻塞
+    start_polling(handle_message)   # 主线程阻塞，保持进程存活
