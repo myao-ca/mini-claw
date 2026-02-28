@@ -25,6 +25,9 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
+from queue import Queue
+from threading import Thread
+
 from agent import Agent
 from telegram_channel import start_polling
 
@@ -43,12 +46,51 @@ from telegram_channel import start_polling
 
 sessions: dict[int, Agent] = {}
 
+# ============================================================
+# 串行任务队列
+#
+# 对应 OpenClaw：Task Channel Queue
+#
+# 每个 session 一个队列 + 一个后台 worker 线程。
+# 消息进来先入队，worker 串行取出处理，消除竞态。
+# 不同用户之间互不影响，仍然并行。
+# ============================================================
+
+task_queues: dict[int, Queue] = {}
+
 
 def get_or_create_session(chat_id: int) -> Agent:
     """获取或创建该 chat_id 的 Agent 会话"""
     if chat_id not in sessions:
         sessions[chat_id] = Agent(str(chat_id))
     return sessions[chat_id]
+
+
+def _worker(chat_id: int, q: Queue):
+    """每个 session 的串行 worker 线程"""
+    while True:
+        text, response_q = q.get()
+        try:
+            agent = get_or_create_session(chat_id)
+            result = agent.run(text)
+            logger.info(f"[{chat_id}] <<< {result[:80]!r}{'...' if len(result) > 80 else ''}")
+        except Exception as e:
+            result = f"[错误] {e}"
+            logger.error(f"[{chat_id}] worker 异常: {e}")
+        finally:
+            response_q.put(result)
+            q.task_done()
+
+
+def get_or_create_queue(chat_id: int) -> Queue:
+    """获取或创建该 chat_id 的任务队列，首次创建时启动 worker 线程"""
+    if chat_id not in task_queues:
+        q = Queue()
+        task_queues[chat_id] = q
+        t = Thread(target=_worker, args=(chat_id, q), daemon=True)
+        t.start()
+        logger.info(f"[{chat_id}] 新建 session worker")
+    return task_queues[chat_id]
 
 
 # ============================================================
@@ -61,9 +103,8 @@ def handle_message(chat_id: int, text: str) -> str:
     """
     消息路由核心：收到消息 → 找到对应 Agent → 返回回复
 
-    内置两个特殊命令：
-      /start  — 欢迎语
-      /reset  — 清空当前会话的对话历史
+    内置命令直接返回，不走队列。
+    普通消息入队，等 worker 串行处理完再返回。
     """
     text = text.strip()
     logger.info(f"[{chat_id}] >>> {text!r}")
@@ -95,14 +136,10 @@ def handle_message(chat_id: int, text: str) -> str:
         agent.mode = "code"
         return "💻 已切换到编程助手模式"
 
-    # 路由到 Agent
-    agent = get_or_create_session(chat_id)
-    response = agent.run(text)
-    logger.info(f"[{chat_id}] <<< {response[:80]!r}{'...' if len(response) > 80 else ''}")
-    return response
-
-    # 临时测试用（验证 Telegram 连接正常后删掉）
-    # return "hi!"
+    # 普通消息入队，等 worker 处理完返回
+    response_q: Queue = Queue()
+    get_or_create_queue(chat_id).put((text, response_q))
+    return response_q.get()  # 阻塞等待，直到 worker 处理完
 
 
 # ============================================================

@@ -175,7 +175,7 @@ class Agent:
                 system="你是一个对话摘要助手。请将以下对话历史概括成简洁的摘要，保留关键信息和结论。",
                 messages=[{
                     "role": "user",
-                    "content": f"请概括以下对话：\n\n{json.dumps(old_messages, ensure_ascii=False, indent=2)}"
+                    "content": f"请概括以下对话：\n\n{json.dumps([self._serialize_message(m) for m in old_messages], ensure_ascii=False, indent=2)}"
                 }]
             ) as stream:
                 for text in stream.text_stream:
