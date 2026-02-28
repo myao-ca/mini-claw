@@ -56,6 +56,7 @@
 ✅ Step 6      持久化会话历史
 ✅ Step 7      动态 System Prompt
 ✅ Step 8      上下文压缩（Compaction）
+✅ Step 9      串行任务队列
 ⬜ Step 9-11   架构升级
 ⬜ Step 12-13  智能升级
 ⬜ Step 14-15  生产化
@@ -80,18 +81,19 @@
 
 ## 学习进度追踪
 
-| 编号 | 核心竞争力 | Step 1 | Step 2 | Step 3 | Step 4 | Step 5 | Step 6 | Step 7 | Step 8 |
-|------|-----------|--------|--------|--------|--------|--------|--------|--------|--------|
-| ① | Trigger Layer | | | | 重点 | 验证 | | | |
-| ② | Channel Adapter Pattern | | | | 重点 | 验证 | | | |
-| ③ | Gateway / Message Routing | | | | 重点 | 验证 | | | |
-| ④ | Session Management | | | | 简陋 | | 持久化 | | |
-| ⑤ | Security & Permissions | | 重点 | | | | | | |
-| ⑥ | Config Management | 重点 | 扩展 | | | | | | |
-| ⑦ | Always-On Service | | | | 重点 | 验证 | | | |
-| ⑧ | Callback / Decoupling | | | | 重点 | | | | |
-| ⑨ | Dynamic System Prompt | | | | | | | 重点 | |
-| ⑩ | Context Compaction | | | | | | | | 重点 |
+| 编号 | 核心竞争力 | Step 1 | Step 2 | Step 3 | Step 4 | Step 5 | Step 6 | Step 7 | Step 8 | Step 9 |
+|------|-----------|--------|--------|--------|--------|--------|--------|--------|--------|--------|
+| ① | Trigger Layer | | | | 重点 | 验证 | | | | |
+| ② | Channel Adapter Pattern | | | | 重点 | 验证 | | | | |
+| ③ | Gateway / Message Routing | | | | 重点 | 验证 | | | | |
+| ④ | Session Management | | | | 简陋 | | 持久化 | | | 串行 |
+| ⑤ | Security & Permissions | | 重点 | | | | | | | |
+| ⑥ | Config Management | 重点 | 扩展 | | | | | | | |
+| ⑦ | Always-On Service | | | | 重点 | 验证 | | | | |
+| ⑧ | Callback / Decoupling | | | | 重点 | | | | | |
+| ⑨ | Dynamic System Prompt | | | | | | | 重点 | | |
+| ⑩ | Context Compaction | | | | | | | | 重点 | |
+| ⑪ | Task Queue | | | | | | | | | 重点 |
 
 ---
 
@@ -321,6 +323,34 @@ KEEP_RECENT = 10   # 压缩时保留最近几条不动
 
 ---
 
+### Step 9：串行任务队列
+
+**目标**：消除同一 session 并发处理消息引发的竞态条件。
+
+**问题**：Telegram 的 `infinity_polling()` 是多线程的，多条消息同时进来会并发调用 `handle_message()`。同一个 Agent 实例的 `conversation_history` 被多个线程同时读写，导致 history 错乱、API 并发过高触发限流。
+
+**解法**：每个 session 一个 `Queue` + 一个 worker 线程。消息进来先入队，worker 串行取出处理：
+
+```
+消息1 ──┐
+消息2 ──┤→ Queue → worker 线程 → 串行处理 → 回复
+消息3 ──┘
+```
+
+调用方 `handle_message()` 把任务放入队列后阻塞等待，直到 worker 处理完返回结果。不同用户之间仍然并行（各自有独立的 Queue + worker）。
+
+**核心改动**（gateway.py）：
+
+| 新增 | 说明 |
+|------|------|
+| `task_queues: dict[int, Queue]` | 每个 chat_id 一个队列 |
+| `_worker(chat_id, q)` | 串行处理队列里的任务，永不退出的 daemon 线程 |
+| `get_or_create_queue()` | 首次创建队列时同步启动 worker 线程 |
+
+**对应 OpenClaw**：Task Channel Queue（串行 by default 的设计原则）
+
+---
+
 ## Tips & 知识点
 
 ### TEMP 环境变量与 Windows 短路径问题
@@ -462,6 +492,38 @@ Remote Control:   Claude App → Anthropic API（中转）→ 本机 Claude Code
 | `.jsonl` 文件（磁盘） | 卡片 | 进程重启后恢复全部上下文 | 永久，直到 `/reset` |
 
 > Claude Code 的 `/resume` 命令做的就是这件事：选一个 `.jsonl` 文件，把里面所有消息作为 `messages` 传给 API，Claude 就"接上了"上次的工作。那些文件就在 `~/.claude/projects/` 下，可以直接打开看。
+
+---
+
+### 任务队列：简陋实现 vs 实际工程实践
+
+mini-claw 的串行队列是最简单的 FIFO（先进先出）——绝对公平，按到达顺序处理，没有任何优先级概念。
+
+**FIFO 的局限**
+
+正在执行的任务（LLM 已经在跑）确实无法中断。但还在队列里等待的任务完全可以重新排序——它们还没碰到 LLM，只是在等。换成 `PriorityQueue`，每条消息带一个优先级数字，worker 每次取优先级最高的那条，就实现了优先级调度。这本质上和操作系统的进程调度一样：CPU 同一时间只跑一个进程，但调度器决定谁先上。
+
+**谁来判断优先级？**
+
+这是真正的工程问题。常见的几种做法：
+
+| 方式 | 说明 |
+|------|------|
+| 用户自己标注 | 发消息时加"！"或用特殊命令 |
+| 规则判断 | 关键词匹配，如"急"、"blocking" |
+| LLM 判断 | 让一个小模型读消息内容打分 |
+| 专职 PO Agent | 独立的 orchestrator agent 负责优先级决策 |
+
+**Orchestrator-Worker 模式**
+
+最后一种是真正的多 agent 编排：PO Agent 不干活，只管"什么时候做什么"；Worker Agent 只执行，不思考优先级。类比软件团队：PO 管 what & when，工程师管 how。
+
+```
+用户消息 → [PO Agent：判断优先级、分配任务] → [Worker Agent 1]
+                                             → [Worker Agent 2]
+```
+
+LangGraph 的 supervisor 节点、OpenAI Swarm 的 handoff 机制，本质上都是这个模式。这也是为什么"多 agent 编排"是目前最热的话题——单个 agent 能力有限，PO + 多个专职 worker 组合起来已经很接近一个小团队了。
 
 ---
 
