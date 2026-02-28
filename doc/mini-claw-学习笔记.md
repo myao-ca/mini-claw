@@ -495,6 +495,22 @@ Remote Control:   Claude App → Anthropic API（中转）→ 本机 Claude Code
 
 ---
 
+### Hooks / MCP / Skills — 三个容易混淆的概念
+
+一句话区分：**Hooks 是事件响应，MCP/Tools 是能力扩展，Skills 是用户快捷指令。**
+
+| | 触发方式 | 本质 | 例子 |
+|---|---|---|---|
+| **Hooks** | 系统事件自动触发 | 旁观者，悄悄监听 | "每次 Claude 写文件前，先备份" |
+| **MCP / Tools** | LLM 判断需要时调用 | 给 Claude 新的手 | `read_file`、连接 PowerPoint API |
+| **Skills** | 用户主动输入 `/命令` | Prompt 的快捷方式 | `/commit` 展开成一段 commit 规范 |
+
+它们可以组合使用——一个好的 PPT 工具，可以是：MCP server 提供创建幻灯片的能力，Skill 提供"按什么步骤、什么格式做 PPT"的 prompt，两者结合才是完整的用户体验。
+
+**护城河的不对称**：MCP server 需要写代码、对接 API，门槛高；Skill 只是 prompt，门槛极低。但随着 AI 把写代码的成本拉低，这个不对称可能会反转——代码变成 AI 的 labor，真正需要"人"的反而是理解用户真正想要什么、知道什么时候该做什么。
+
+---
+
 ### 任务队列：简陋实现 vs 实际工程实践
 
 mini-claw 的串行队列是最简单的 FIFO（先进先出）——绝对公平，按到达顺序处理，没有任何优先级概念。
