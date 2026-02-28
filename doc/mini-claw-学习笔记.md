@@ -58,7 +58,7 @@
 ✅ Step 8      上下文压缩（Compaction）
 ✅ Step 9      串行任务队列
 ✅ Step 10     Hook 系统
-⬜ Step 11     第二个频道（HTTP API）
+✅ Step 11     第二个频道（HTTP API）
 ⬜ Step 12-13  智能升级
 ⬜ Step 14-15  生产化
 ```
@@ -82,20 +82,21 @@
 
 ## 学习进度追踪
 
-| 编号 | 核心竞争力 | Step 1 | Step 2 | Step 3 | Step 4 | Step 5 | Step 6 | Step 7 | Step 8 | Step 9 | Step 10 |
-|------|-----------|--------|--------|--------|--------|--------|--------|--------|--------|--------|---------|
-| ① | Trigger Layer | | | | 重点 | 验证 | | | | | |
-| ② | Channel Adapter Pattern | | | | 重点 | 验证 | | | | | |
-| ③ | Gateway / Message Routing | | | | 重点 | 验证 | | | | | |
-| ④ | Session Management | | | | 简陋 | | 持久化 | | | 串行 | |
-| ⑤ | Security & Permissions | | 重点 | | | | | | | | |
-| ⑥ | Config Management | 重点 | 扩展 | | | | | | | | |
-| ⑦ | Always-On Service | | | | 重点 | 验证 | | | | | |
-| ⑧ | Callback / Decoupling | | | | 重点 | | | | | | |
-| ⑨ | Dynamic System Prompt | | | | | | | 重点 | | | |
-| ⑩ | Context Compaction | | | | | | | | 重点 | | |
-| ⑪ | Task Queue | | | | | | | | | 重点 | |
-| ⑫ | Hook System | | | | | | | | | | 重点 |
+| 编号 | 核心竞争力 | Step 1 | Step 2 | Step 3 | Step 4 | Step 5 | Step 6 | Step 7 | Step 8 | Step 9 | Step 10 | Step 11 |
+|------|-----------|--------|--------|--------|--------|--------|--------|--------|--------|--------|---------|---------|
+| ① | Trigger Layer | | | | 重点 | 验证 | | | | | | 扩展 |
+| ② | Channel Adapter Pattern | | | | 重点 | 验证 | | | | | | 验证 |
+| ③ | Gateway / Message Routing | | | | 重点 | 验证 | | | | | | |
+| ④ | Session Management | | | | 简陋 | | 持久化 | | | 串行 | | |
+| ⑤ | Security & Permissions | | 重点 | | | | | | | | | |
+| ⑥ | Config Management | 重点 | 扩展 | | | | | | | | | |
+| ⑦ | Always-On Service | | | | 重点 | 验证 | | | | | | |
+| ⑧ | Callback / Decoupling | | | | 重点 | | | | | | | |
+| ⑨ | Dynamic System Prompt | | | | | | | 重点 | | | | |
+| ⑩ | Context Compaction | | | | | | | | 重点 | | | |
+| ⑪ | Task Queue | | | | | | | | | 重点 | | |
+| ⑫ | Hook System | | | | | | | | | | 重点 | |
+| ⑬ | Multi-Channel | | | | | | | | | | | 重点 |
 
 ---
 
@@ -414,6 +415,45 @@ Notification — 需要通知用户时
 | 本质 | 相同 | 相同 |
 
 **对应 OpenClaw**：`src/plugins/hooks.ts`
+
+---
+
+### Step 11：第二个频道（HTTP API）
+
+**目标**：验证 Channel Adapter Pattern 真的管用——加新频道，不改核心。
+
+**核心改动**：
+
+| 文件 | 改动 |
+|------|------|
+| `http_channel.py`（新建） | Flask HTTP 服务器，监听 `127.0.0.1:5000` |
+| `gateway.py` | 加一行 `start_http(handle_message)`，其余不动 |
+
+**接口**：
+
+```bash
+# 发消息
+POST /message   {"chat_id": 0, "text": "你好"}  →  {"reply": "..."}
+
+# 健康检查
+GET  /health                                    →  {"status": "ok"}
+```
+
+**两个频道并行运行**：
+
+```
+Telegram 消息  →  telegram_channel.py  ──┐
+                                         ├──→  handle_message()  →  Agent
+HTTP POST 请求  →  http_channel.py     ──┘
+```
+
+HTTP channel 在后台 daemon 线程运行，不阻塞主线程；Telegram channel 的 `infinity_polling()` 继续在主线程阻塞保持进程存活。
+
+**验证结论**：gateway.py 的路由逻辑一行没改。`handle_message()` 完全不知道消息从哪来——这就是 Channel Adapter Pattern 的价值所在。
+
+**多 Channel 的真实价值**：对个人使用，一个 Telegram 完全够用。多 Channel 真正有价值的场景是**一个 Agent 服务多种用户**——不同用户习惯不同平台。Step 11 的意义不是"我要同时用两个频道"，而是架构上的证明。
+
+**对应 OpenClaw**：OpenClaw 内置 9 个 Channel（Telegram、WhatsApp、Discord、Slack、Signal、iMessage、IRC、Google Chat、Microsoft Teams），外加第三方扩展插槽。
 
 ---
 
