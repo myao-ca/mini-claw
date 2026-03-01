@@ -74,10 +74,14 @@ def _worker(chat_id: int, q: Queue):
         text, response_q = q.get()
         try:
             agent = get_or_create_session(chat_id)
-            hooks.fire("before_agent_run", {"chat_id": chat_id, "text": text, "mode": agent.mode})
-            result = agent.run(text)
-            logger.info(f"[{chat_id}] <<< {result[:80]!r}{'...' if len(result) > 80 else ''}")
-            hooks.fire("after_reply", {"chat_id": chat_id, "text": text, "reply": result})
+            if text == "/reset":
+                agent.reset()
+                result = "✅ 对话已重置"
+            else:
+                hooks.fire("before_agent_run", {"chat_id": chat_id, "text": text, "mode": agent.mode})
+                result = agent.run(text)
+                logger.info(f"[{chat_id}] <<< {result[:80]!r}{'...' if len(result) > 80 else ''}")
+                hooks.fire("after_reply", {"chat_id": chat_id, "text": text, "reply": result})
         except Exception as e:
             result = f"[错误] {e}"
             logger.error(f"[{chat_id}] worker 异常: {e}")
@@ -126,11 +130,7 @@ def handle_message(chat_id: int, text: str) -> str:
             "/reset — 清空对话历史，重新开始"
         )
 
-    if text == "/reset":
-        if chat_id in sessions:
-            sessions[chat_id].reset()
-        return "✅ 对话已重置"
-
+    # /chat 和 /code 只改内存状态，不涉及文件，直接处理
     if text == "/chat":
         agent = get_or_create_session(chat_id)
         agent.mode = "chat"
@@ -141,7 +141,7 @@ def handle_message(chat_id: int, text: str) -> str:
         agent.mode = "code"
         return "💻 已切换到编程助手模式"
 
-    # 普通消息入队，等 worker 处理完返回
+    # /reset 和普通消息都走队列，保证串行，避免和 worker 竞争 session 文件
     response_q: Queue = Queue()
     get_or_create_queue(chat_id).put((text, response_q))
     return response_q.get()  # 阻塞等待，直到 worker 处理完

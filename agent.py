@@ -164,6 +164,18 @@ class Agent:
         old_messages = self.conversation_history[:-KEEP_RECENT]
         recent_messages = self.conversation_history[-KEEP_RECENT:]
 
+        # 确保 recent_messages 不以孤立的 tool_result 开头
+        # （对应的 tool_use 已被压缩删除，API 会报错）
+        while recent_messages:
+            first_content = recent_messages[0].get("content", "")
+            if isinstance(first_content, list) and any(
+                isinstance(b, dict) and b.get("type") == "tool_result"
+                for b in first_content
+            ):
+                recent_messages = recent_messages[1:]
+            else:
+                break
+
         logger.info(f"压缩历史：{len(old_messages)} 条 → 摘要，保留最近 {len(recent_messages)} 条")
 
         # 让 LLM 概括旧消息
