@@ -686,6 +686,37 @@ LangGraph 的 supervisor 节点、OpenAI Swarm 的 handoff 机制，本质上都
 
 ---
 
+### 每次调用 LLM 放进去的三样东西
+
+不管是 Anthropic、OpenAI 还是 Google，LLM API 的调用结构是行业共识，三样东西：
+
+```
+API 调用 = {
+  system   : 动态 base prompt + MEMORY.md（长期记忆，全局）
+  tools    : 当前模式下允许的工具 schema
+  messages : session 历史（有上限，超了压缩）+ 当前用户输入
+}
+```
+
+**你需要告诉 LLM 三件事**：它是谁（system）、之前发生了什么（messages）、它能做什么（tools）。LLM 没有任何天然记忆，每次调用都从零开始，全靠这三样重新组装。
+
+**tools 可以按模式给不同集合**：chat 模式完全不给工具，从根本上消除误调工具的可能，比在 prompt 里说"不要用工具"可靠得多。
+
+**Skills 加载位置**：分两阶段——启动时把可用 skill 列表（名字+简介）注入 system；用户调用 `/commit` 时，skill 完整内容展开后注入当前 messages 这一轮。按需展开，没用到不占 token。
+
+| 内容 | 位置 | 时机 |
+|------|------|------|
+| MEMORY.md | system | 每次调用前构建 |
+| skill 列表 | system | 启动时 |
+| tool schema | tools | 每次调用（可按模式给不同集合） |
+| session 历史 | messages | 每次调用 |
+| skill 完整内容 | messages | 用户调用时展开 |
+| 用户当前输入 | messages | 每次调用 |
+
+**最终喂给模型的顺序**：API 层面是 system 最先、messages 按时间顺序（旧前新后）、tools 单独传入由 API 决定位置。但内部拼成什么 token 序列是各家私有实现，和模型训练时用的 chat template 绑定——这叫**量体裁衣**：Claude 按 Anthropic 的格式训练，就得按那个格式喂，换模型就得换格式。SDK 帮你把这个细节藏起来了，你只管填三个桶。
+
+---
+
 ### Gateway vs Orchestrator — 两层路由的分工
 
 系统里有两种"路由"，容易混淆，但路由的对象完全不同：
