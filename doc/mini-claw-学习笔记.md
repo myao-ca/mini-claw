@@ -715,6 +715,12 @@ API 调用 = {
 
 **最终喂给模型的顺序**：API 层面是 system 最先、messages 按时间顺序（旧前新后）、tools 单独传入由 API 决定位置。但内部拼成什么 token 序列是各家私有实现，和模型训练时用的 chat template 绑定——这叫**量体裁衣**：Claude 按 Anthropic 的格式训练，就得按那个格式喂，换模型就得换格式。SDK 帮你把这个细节藏起来了，你只管填三个桶。
 
+**system 里可以有多层内容**：动态 base prompt（模式、时间、workspace）、MEMORY.md、skill 列表都在 system 里，不是只有一段话。哪些放 system、哪些放 messages 也不是绝对——有些框架把部分上下文放在第一条 user message 里效果一样，取决于模型训练时怎么见到这些内容。
+
+**MEMORY.md vs CLAUDE.md**：机制相同，范围不同。CLAUDE.md 是项目级（跟着 repo 走，关于"这个项目是什么"）；MEMORY.md 是用户级（关于"这个用户是谁"）。两者都是启动时加载进 system 的静态知识，是 agent 的"人格底色"——跨所有 session 都应该知道的事，比如用户的名字、偏好、习惯，和 session 历史（对话记录）是两回事。
+
+**Skills 展开内容放 messages 不放 tools**：tools bucket 里放的是 JSON schema（函数签名），是 LLM 可以调用的能力声明；skills 展开的是自然语言 prompt，是行为指导。两者本质不同——tools 是"你有哪些手"，skills 是"你应该怎么做事"。
+
 ---
 
 ### Gateway vs Orchestrator — 两层路由的分工
