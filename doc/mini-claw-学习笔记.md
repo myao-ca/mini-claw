@@ -882,3 +882,32 @@ mini-claw 路上聊          →  bot 启动时读 JOURNAL.md，知道项目现�
 - [ ] `agent.py`：启动时读 `JOURNAL.md` 注入 system prompt
 - [ ] `gateway.py` + `tools.py`：加 `/note` 命令，安全地追加写入文件
 - [ ] 约定 `JOURNAL.md` 的写作风格（不是流水账，是值得留下来的东西）
+
+---
+
+## 下下个项目：RAG
+
+**背景**：FTS5 是关键词搜索，只能匹配词语，不理解语义。RAG（Retrieval-Augmented Generation）是下一步——用向量数据库做语义检索，找到"意思相近"而不只是"词语相同"的内容。
+
+**和 FTS5 的区别**：
+
+| | FTS5 | RAG |
+|---|---|---|
+| 搜索方式 | 关键词匹配 | 语义相似度（向量距离） |
+| 搜"不爱吃蔬菜" | 找不到"芹菜"那条 | 能找到 |
+| 典型规模 | 几十~几百条记忆 | 几万~几百万段文档 |
+| 依赖 | 零依赖（sqlite3 内置） | 需要 embedding 模型 |
+
+**插入位置的惯例**：
+- 个人记忆（MEMORY.md / FTS5）→ **system prompt**，是关于用户的背景知识，每次都可能相关
+- RAG 检索到的文档 → **messages**（紧贴用户消息放），是针对这个具体问题的参考资料
+
+```
+RAG 典型用法：
+messages = [
+  ...历史...,
+  {"role": "user", "content": "[检索到的相关段落]\n\n用户的原始问题"}
+]
+```
+
+**待学习**：embedding 模型、向量相似度计算、向量数据库（ChromaDB / pgvector / sqlite-vec）
